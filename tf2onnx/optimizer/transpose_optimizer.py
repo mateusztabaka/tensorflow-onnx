@@ -705,18 +705,18 @@ class TransposeOptimizer(GraphOptimizerBase):
         else:  # in opset 10, axes is input instead of an attribute.
             if len(node.inputs) >= 4 and node.inputs[3].is_const():
                 axes = node.inputs[3].get_tensor_value(as_list=True)
-                if axes == list(range(trans_rank)):
-                    axes = NCHW_TO_NHWC if trans_rank == 4 else NCDHW_TO_NDHWC
-                    # axes node might be shared
-                    new_axes = np.array(axes, dtype=np.int64)
-                    if self._nodes_has_single_consumer_node([node.inputs[3]]):
-                        node.inputs[3].set_tensor_value(new_axes)
-                    else:
-                        new_axes_const = self._g.make_const(
-                            utils.make_name(node.inputs[3].name), new_axes
-                        )
-                        self._g.replace_input(node, node.input[3], new_axes_const.output[0], 3)
-                    return self._switch_transpose_and_node(node, trans)
+                perm = NCHW_TO_NHWC if trans_rank == 4 else NCDHW_TO_NDHWC
+                axes = [perm[axes[i]] for i in range(len(axes))]
+                # axes node might be shared
+                new_axes = np.array(axes, dtype=np.int64)
+                if self._nodes_has_single_consumer_node([node.inputs[3]]):
+                    node.inputs[3].set_tensor_value(new_axes)
+                else:
+                    new_axes_const = self._g.make_const(
+                        utils.make_name(node.inputs[3].name), new_axes
+                    )
+                    self._g.replace_input(node, node.input[3], new_axes_const.output[0], 3)
+                return self._switch_transpose_and_node(node, trans)
         return False
 
     def _quantize_handler(self, trans, node):
