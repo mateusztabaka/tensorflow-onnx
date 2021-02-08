@@ -122,6 +122,35 @@ class OptimizerTests(Tf2OnnxBackendTestBase):
                          }
             self.run_transpose_compare(["res"], feed_dict, model_proto, remaining_transpose_num=1)
 
+#    @parameterized.expand([
+#        ((2, 3, 4, 5), [0, 2, 3, 1], [0, 3, 1, 2]),
+#        ((2, 3, 4), [0, 2, 1], [0, 2, 1]),
+#        ((2, 3, 4, 5, 6), [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]),
+#    ])
+#    def test_transpose_with_concat_both_inputs_transposed(self, input_shape, perm_input, perm_output):
+#        for axis in range(len(input_shape)):
+#            output_shape = list(input_shape)
+#            output_shape[perm_input[axis]] *= 2
+#            node1 = helper.make_node("Transpose", ["input_data1"], ["Y1"], perm=perm_input, name="trans1")
+#            node2 = helper.make_node("Transpose", ["input_data2"], ["Y2"], perm=perm_input, name="trans2")
+#            node3 = helper.make_node("Concat", ["Y1", "Y2"], ["Z"], axis=axis, name="concat")
+#            node4 = helper.make_node("Transpose", ["Z"], ["res"], perm=perm_output, name="transout")
+#
+#            graph = helper.make_graph(
+#                [node1, node2, node3, node4],
+#                "test_transpose_with_concat",
+#                [helper.make_tensor_value_info("input_data1", TensorProto.FLOAT, input_shape),
+#                 helper.make_tensor_value_info("input_data2", TensorProto.FLOAT, input_shape),
+#                 ],
+#                [helper.make_tensor_value_info("res", TensorProto.FLOAT, output_shape)],
+#            )
+#
+#            model_proto = self.make_model(graph, producer_name="onnx-tests")
+#            feed_dict = {"input_data1": np.random.randn(*input_shape).astype(np.float32),
+#                         "input_data2": np.random.randn(*input_shape).astype(np.float32),
+#                         }
+#            self.run_transpose_compare(["res"], feed_dict, model_proto, remaining_transpose_num=0)
+#
     @parameterized.expand([
         ((2, 3, 4, 5), [0, 2, 3, 1], [0, 3, 1, 2]),
         ((2, 3, 4, 5, 6), [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]),
@@ -439,6 +468,27 @@ class OptimizerTests(Tf2OnnxBackendTestBase):
         model_proto = self.make_model(graph, producer_name="onnx-tests")
         self.run_transpose_compare(["OUT"], {"X": np.random.randn(*input_shape1).astype(np.float32)},
                                    model_proto, remaining_transpose_num=1)
+
+    @parameterized.expand([
+        ((2, 3, 4, 5), [0, 2, 3, 1], [0, 3, 1, 2]),
+        ((2, 3, 4, 5, 6), [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]),
+    ])
+    def test_transpose_mul_as_square(self, shape, perm_input, perm_output):
+        node0 = helper.make_node("Transpose", ["X"], ["Y"], perm=perm_input, name="trans")
+        node1 = helper.make_node("Mul", ["Y", "Y"], ["Z"], name="mul")
+        node2 = helper.make_node("Transpose", ["Z"], ["OUT"], perm=perm_output, name="trans_1")
+
+        graph = helper.make_graph(
+            [node0, node1, node2],
+            "transpose-mul-as-sqr-test",
+            [helper.make_tensor_value_info("X", TensorProto.FLOAT, shape)],
+            [helper.make_tensor_value_info("OUT", TensorProto.FLOAT, shape)],
+        )
+
+        model_proto = self.make_model(graph, producer_name="onnx-tests")
+        self.run_transpose_compare(["OUT"], {"X": np.random.randn(*shape).astype(np.float32)},
+                                   model_proto, remaining_transpose_num=0)
+
 
     @parameterized.expand([
         ((2, 3, 4, 5), [0, 2, 3, 1]),
@@ -983,6 +1033,55 @@ class OptimizerTests(Tf2OnnxBackendTestBase):
         model_proto = self.make_model(graph, producer_name="onnx-tests")
         self.run_transpose_compare(["res"], {"X": np.random.randn(*input_shape).astype(np.float32)},
                                    model_proto, remaining_transpose_num=0)
+
+    @parameterized.expand([
+        ((1, 3, 4, 5), (1, 3, 1, 1), [0, 2, 3, 1], [0, 3, 1, 2]),
+        ((1, 3, 4, 5, 6), (1, 3, 1, 1, 1), [0, 2, 3, 4, 1], [0, 4, 1, 2, 3]),
+    ])
+    @check_opset_max_version(12, "ReduceSum changed in opset 13")
+    def test_transpose_reducesum(self, input_shape, output_shape, perm_input, perm_output):
+        node0 = helper.make_node("Transpose", ["X"], ["Y"], perm=perm_input, name="trans_1")
+        node1 = helper.make_node("ReduceSum", ["Y"], ["Z"], axes=list(range(1, len(input_shape) - 1)),
+                                 keepdims=1, name="reducesum")
+        node2 = helper.make_node("Transpose", ["Z"], ["res"], perm=perm_output, name="trans_2")
+
+        graph = helper.make_graph(
+            [node0, node1, node2],
+            "transpose-reducesum-test",
+            [helper.make_tensor_value_info("X", TensorProto.FLOAT, input_shape)],
+            [helper.make_tensor_value_info("res", TensorProto.FLOAT, output_shape)],
+        )
+
+        model_proto = self.make_model(graph, producer_name="onnx-tests")
+        self.run_transpose_compare(["res"], {"X": np.random.randn(*input_shape).astype(np.float32)},
+                                   model_proto, remaining_transpose_num=0)
+
+    @parameterized.expand([
+        ((2, 3, 4, 5), (2, -1, 3), (2, 3, 20), [0, 2, 3, 1], [0, 2, 1]),
+        ((2, 3, 4, 5), (2, 20, 3), (2, 3, 20), [0, 2, 3, 1], [0, 2, 1]),
+        ((2, 3, 4, 5, 6), (2, -1, 3), (2, 3, 120), [0, 2, 3, 4, 1], [0, 2, 1]),
+        ((2, 3, 4, 5, 6), (2, 120, 3), (2, 3, 120), [0, 2, 3, 4, 1], [0, 2, 1]),
+    ])
+    @check_opset_min_version(5, "Reshape in opset 5 has shape as a second input")
+    def test_transpose_reshape(self, input_shape, reshape_input, output_shape, perm_input, perm_output):
+        shape = helper.make_tensor("const_tensor", TensorProto.INT64, (len(reshape_input),), reshape_input)
+        shape_node = helper.make_node("Constant", [], ["Shape"], value=shape, name="Shape")
+        node0 = helper.make_node("Transpose", ["X"], ["Y"], perm=perm_input, name="trans_1")
+        node1 = helper.make_node("Reshape", ["Y", "Shape"], ["Z"], name="reshape")
+        node2 = helper.make_node("Transpose", ["Z"], ["res"], perm=perm_output, name="trans_2")
+
+        graph = helper.make_graph(
+            [node0, shape_node, node1, node2],
+            "transpose-reducesum-test",
+            [helper.make_tensor_value_info("X", TensorProto.FLOAT, input_shape)],
+            [helper.make_tensor_value_info("res", TensorProto.FLOAT, output_shape)],
+        )
+
+        model_proto = self.make_model(graph, producer_name="onnx-tests")
+        self.run_transpose_compare(["res"], {"X": np.random.randn(*input_shape).astype(np.float32)},
+                                   model_proto, remaining_transpose_num=0)
+
+
 
     @parameterized.expand([
         ((2, 3, 4, 5), (2, 4, 5, 3), [0, 2, 3, 1]),
